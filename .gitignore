@@ -1,0 +1,13 @@
+# Ignore data and large files
+data/
+output/
+*.tif
+*.tiff
+*.csv
+
+# Ignore model weights (or keep one small one if you want)
+models/*.pth
+
+# Python environment
+__pycache__/
+.DS_Store

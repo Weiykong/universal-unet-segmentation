@@ -1,62 +1,90 @@
-# Universal U-Net Segmentation Engine 🔬
+# 🔬 Universal U-Net Segmentation
 
-A lightweight, high-performance deep learning pipeline designed to transform raw microscopy images into high-fidelity **Probability Maps**.
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Weiykong/universal-unet-segmentation/blob/main/demo.ipynb)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
 
-## Overview
-This project provides a robust, device-agnostic U-Net implementation. Unlike standard segmenters that produce binary masks, this engine outputs continuous probability values (0.0 to 1.0). This approach preserves sub-pixel information and intensity gradients, making it ideal for downstream analysis like particle tracking with **TrackPy**, centroid detection, or high-precision feature segmentation.
+A lightweight, universal U-Net implementation designed for high-performance biological image segmentation. This project is optimized for **TIFF stacks** and supports acceleration on **Apple Silicon (M1/M2/M3)** as well as standard CUDA GPUs.
 
+## 📂 Project Structure
 
-
-## Key Features
-* **Universal Training**: Optimized for any raw image + binary mask pairs (beads, cells, vesicles, etc.).
-* **Random Crop Training**: Train on large frames (e.g., 1024x1024) using random 512x512 patches to improve generalization and memory efficiency.
-* **Hardware Acceleration**: Automatic support for Apple Silicon (**MPS**), NVIDIA (**CUDA**), and CPU.
-* **Stable Learning**: Includes Batch Normalization and weighted loss functions (`pos_weight`) to prevent model collapse on sparse datasets.
-* **32-bit Output**: Probability maps are saved as 32-bit TIFFs to maintain high numerical precision for scientific analysis.
-
-## Project Structure
 ```text
-.
-├── data/
-│   ├── images/           # Training Raw TIFFs
-│   ├── masks/            # Training Binary Masks
-│   └── inference_input/  # Unseen raw data for prediction
-├── src/
-│   ├── model.py          # U-Net Architecture
-│   ├── train.py          # Training & Augmentation logic
-│   └── inference.py      # Probability Map generation
-├── output/               # Resulting Probability Maps
-├── run.py                # Main pipeline entry point
-└── requirements.txt      # Dependencies
+universal-unet-segmentation/
+├── data/                  # Data directory (ignored by Git)
+│   ├── images/            # Place raw input TIFF images here
+│   ├── masks/             # Place ground truth binary masks here
+│   └── inference_input/   # Place new images to segment here
+├── models/                # Saved model weights (.pth)
+├── output/                # Segmentation probability maps
+├── src/                   # Core implementation
+│   ├── model.py           # U-Net architecture
+│   ├── train.py           # Training loop
+│   └── inference.py       # Prediction logic
+├── run.py                 # Main execution script (Entry point)
+└── requirements.txt       # Strict dependency versions
 ```
 
-## Installation
+## 🚀 Quick Start
+1. Installation
+Clone the repository and install the dependencies:
+
+Bash
+git clone [https://github.com/Weiykong/universal-unet-segmentation.git](https://github.com/Weiykong/universal-unet-segmentation.git)
+cd universal-unet-segmentation
+pip install -r requirements.txt
+
+## 2. Try the Demo (No Installation Required)
+Click the "Open in Colab" badge at the top of this README to launch a live Jupyter Notebook. This will:
+
+Clone the code on a remote cloud server.
+
+Generate synthetic test data.
+
+Run the model and visualize the results instantly.
+
+## 🖥️ Usage Guide
+### Mode 1: Training a New Model
+To train the U-Net on your own dataset:
+
+Place your raw images (TIFF) in data/images/.
+
+Place your corresponding binary masks in data/masks/.
+
+Run the training command:
+
+Bash
+python run.py --mode train --epochs 50 --batch_size 4 --lr 0.001
+Models will be saved automatically to the models/ folder.
+
+### Mode 2: Inference (Segmentation)
+To use a trained model to segment new images:
+
+Place your new images in data/inference_input/.
+
+Run the inference command:
+
+Bash
+python run.py --mode inference --model_path models/best_model.pth
+Results will be saved as probability maps in output/.
+
+## 🛠️ Requirements & Compatibility
+This project uses strict version pinning for reproducibility.
+
+Python: 3.10+
+
+PyTorch: >= 2.0.0 (Required for MPS acceleration on Mac)
+
+Key Libraries: tifffile, numpy, pandas, trackpy, pystackreg
+
+To install the exact environment used in development:
+
 Bash
 pip install -r requirements.txt
-Usage
-The entire pipeline is managed via run.py.
 
-## 1. Training
-Place your raw data in data/images and masks in data/masks.
+## 📜 License
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-Bash
-python run.py --mode train --augment --epochs 100
---augment: Enables random flips and 90-degree rotations.
+## 👤 Author
+Weiyuan Kong
 
---epochs: Recommended 100+ for small datasets to ensure convergence.
-
-## 2. Inference
-Place raw images or films in data/inference_input.
-
-Bash
-python run.py --mode inference
-The resulting maps will be saved in the output/ folder with a prob_ prefix.
-
-## Why Probability Maps?
-By outputting a 0.0–1.0 range instead of a 0/1 binary mask, this engine allows you to:
-
-Perform sub-pixel localization of centers.
-
-Filter objects by confidence/intensity using downstream thresholds.
-
-Reduce "edge artifacts" common in binary segmentation.
+GitHub: @Weiykong

@@ -35,7 +35,7 @@ def run_pipeline():
     if args.mode in ['all', 'inference']:
         print("\n--- Phase 2: Inference / Probability Map Generation ---")
         try:
-            subprocess.run([sys.executable, "src/infrence.py"], check=True)
+            subprocess.run([sys.executable, "src/inference.py"], check=True)
         except subprocess.CalledProcessError as e:
             print(f"❌ Inference failed: {e}")
             return

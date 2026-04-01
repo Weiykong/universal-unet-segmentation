@@ -1,6 +1,8 @@
 # Ignore data and large files
 data/
-output/
+output/*
+!output/.gitkeep
+!output/ch04_f023_overlay_comparison.png
 *.tif
 *.tiff
 *.csv

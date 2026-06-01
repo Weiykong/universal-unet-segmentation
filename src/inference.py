@@ -36,9 +36,13 @@ def load_model(model_path):
     if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
         depth = checkpoint.get('depth', 4)
         base_features = checkpoint.get('base_features', 64)
-        model = UNet(depth=depth, base_features=base_features).to(DEVICE)
+        norm = checkpoint.get('norm', 'batch')
+        out_channels = checkpoint.get('out_channels', 1)
+        model = UNet(depth=depth, base_features=base_features,
+                     norm=norm, out_channels=out_channels).to(DEVICE)
         model.load_state_dict(checkpoint['state_dict'])
-        print(f"Loaded model: depth={depth}, base_features={base_features}")
+        print(f"Loaded model: depth={depth}, base_features={base_features}, "
+              f"norm={norm}, out_channels={out_channels}")
     else:
         model = UNet().to(DEVICE)
         model.load_state_dict(checkpoint)
@@ -76,7 +80,9 @@ def predict_folder():
         filename = os.path.basename(img_path)
 
         raw = load_image(img_path)
-        img = (raw - np.min(raw)) / (np.max(raw) - np.min(raw) + 1e-6)
+        p_low, p_high = np.percentile(raw, (1, 99))
+        img = np.clip(raw, p_low, p_high)
+        img = (img - p_low) / (p_high - p_low + 1e-6)
 
         input_tensor = torch.from_numpy(img).unsqueeze(0).unsqueeze(0).to(DEVICE)
 
@@ -90,18 +96,22 @@ def predict_folder():
 
         with torch.no_grad():
             output = model(input_tensor)
-            prob_map = torch.sigmoid(output)
 
         # Crop padding
         if pad_h > 0 or pad_w > 0:
-            prob_map = prob_map[:, :, :h, :w]
+            output = output[:, :, :h, :w]
 
-        # Post-process
-        prob_map = prob_map.squeeze().cpu().numpy()
-        prob_map = prob_map * 255.0
-
-        save_path = os.path.join(OUTPUT_DIR, f"prob_{filename}")
-        tifffile.imwrite(save_path, prob_map.astype(np.float32))
+        multiclass = model.out_channels > 1
+        if multiclass:
+            # Save integer label map (0..N-1)
+            result = output.argmax(dim=1).squeeze().cpu().numpy().astype(np.uint8)
+            save_path = os.path.join(OUTPUT_DIR, f"labels_{filename}")
+            tifffile.imwrite(save_path, result)
+        else:
+            prob_map = torch.sigmoid(output).squeeze().cpu().numpy()
+            prob_map = (prob_map * 255.0).astype(np.float32)
+            save_path = os.path.join(OUTPUT_DIR, f"prob_{filename}")
+            tifffile.imwrite(save_path, prob_map)
 
 if __name__ == "__main__":
     predict_folder()

@@ -55,8 +55,10 @@ class BeadDataset(Dataset):
         image = load_image(self.image_paths[idx])
         mask = load_image(self.mask_paths[idx])
 
-        # Normalize image to [0, 1]
-        image = (image - np.min(image)) / (np.max(image) - np.min(image) + 1e-6)
+        # Percentile normalization: robust to hot pixels and saturated regions
+        p_low, p_high = np.percentile(image, (1, 99))
+        image = np.clip(image, p_low, p_high)
+        image = (image - p_low) / (p_high - p_low + 1e-6)
 
         # Handle mask (auto-detect 0-1 vs 0-255)
         if np.max(mask) > 1.0:
@@ -116,30 +118,65 @@ class BeadDataset(Dataset):
         return image, mask
 
 
-def dice_loss(pred, target):
-    """Differentiable soft Dice loss."""
-    pred_soft = torch.sigmoid(pred)
-    intersection = (pred_soft * target).sum()
-    return 1.0 - (2.0 * intersection + 1e-6) / (pred_soft.sum() + target.sum() + 1e-6)
+def dice_loss(pred, target, multiclass=False):
+    """Differentiable soft Dice loss. Supports binary and multi-class."""
+    if multiclass:
+        # pred: (B, C, H, W) logits; target: (B, H, W) integer labels
+        num_classes = pred.shape[1]
+        pred_soft = torch.softmax(pred, dim=1)
+        target_oh = torch.zeros_like(pred_soft).scatter_(
+            1, target.unsqueeze(1).long(), 1.0
+        )
+        loss = 0.0
+        for c in range(num_classes):
+            p, t = pred_soft[:, c], target_oh[:, c]
+            loss += 1.0 - (2.0 * (p * t).sum() + 1e-6) / (p.sum() + t.sum() + 1e-6)
+        return loss / num_classes
+    else:
+        pred_soft = torch.sigmoid(pred)
+        intersection = (pred_soft * target).sum()
+        return 1.0 - (2.0 * intersection + 1e-6) / (pred_soft.sum() + target.sum() + 1e-6)
 
 
-def dice_score(pred, target, threshold=0.5):
+def dice_score(pred, target, threshold=0.5, multiclass=False):
     """Compute Dice coefficient."""
-    pred_bin = (torch.sigmoid(pred) > threshold).float()
-    intersection = (pred_bin * target).sum()
-    return (2.0 * intersection + 1e-6) / (pred_bin.sum() + target.sum() + 1e-6)
+    if multiclass:
+        num_classes = pred.shape[1]
+        pred_bin = pred.argmax(dim=1)
+        scores = []
+        for c in range(num_classes):
+            p = (pred_bin == c).float()
+            t = (target == c).float()
+            scores.append(((2.0 * (p * t).sum() + 1e-6) / (p.sum() + t.sum() + 1e-6)).item())
+        return float(np.mean(scores))
+    else:
+        pred_bin = (torch.sigmoid(pred) > threshold).float()
+        intersection = (pred_bin * target).sum()
+        return (2.0 * intersection + 1e-6) / (pred_bin.sum() + target.sum() + 1e-6)
 
 
-def iou_score(pred, target, threshold=0.5):
+def iou_score(pred, target, threshold=0.5, multiclass=False):
     """Compute Intersection over Union (Jaccard index)."""
-    pred_bin = (torch.sigmoid(pred) > threshold).float()
-    intersection = (pred_bin * target).sum()
-    union = pred_bin.sum() + target.sum() - intersection
-    return (intersection + 1e-6) / (union + 1e-6)
+    if multiclass:
+        num_classes = pred.shape[1]
+        pred_bin = pred.argmax(dim=1)
+        scores = []
+        for c in range(num_classes):
+            p = (pred_bin == c).float()
+            t = (target == c).float()
+            intersection = (p * t).sum()
+            union = p.sum() + t.sum() - intersection
+            scores.append(((intersection + 1e-6) / (union + 1e-6)).item())
+        return float(np.mean(scores))
+    else:
+        pred_bin = (torch.sigmoid(pred) > threshold).float()
+        intersection = (pred_bin * target).sum()
+        union = pred_bin.sum() + target.sum() - intersection
+        return (intersection + 1e-6) / (union + 1e-6)
 
 
 def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop_size,
-          resume=None):
+          resume=None, norm='batch', out_channels=1):
     # Device setup
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if torch.backends.mps.is_available():
@@ -176,12 +213,35 @@ def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop
     val_loader = DataLoader(Subset(full_dataset, val_indices),
                             batch_size=batch_size, shuffle=False) if n_val > 0 else None
 
+    # Compute pos_weight from training masks to handle class imbalance automatically
+    total_pixels = 0
+    foreground_pixels = 0
+    for idx in train_indices:
+        _, mask = full_dataset[idx]
+        total_pixels += mask.numel()
+        foreground_pixels += (mask > 0.5).sum().item()
+    background_pixels = total_pixels - foreground_pixels
+    computed_pos_weight = background_pixels / max(foreground_pixels, 1)
+    # Clamp to [1, 500] to stay numerically stable
+    computed_pos_weight = float(np.clip(computed_pos_weight, 1.0, 500.0))
+    print(f"pos_weight: {computed_pos_weight:.1f} "
+          f"(fg={foreground_pixels/total_pixels*100:.3f}% of training pixels)")
+
+    multiclass = out_channels > 1
+
     # Model, optimizer, scheduler, loss
-    model = UNet(depth=depth, base_features=base_features).to(DEVICE)
+    model = UNet(depth=depth, base_features=base_features, norm=norm,
+                 out_channels=out_channels).to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-    pos_weight = torch.tensor([10.0]).to(DEVICE)
-    bce_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    if multiclass:
+        criterion = nn.CrossEntropyLoss()
+        print(f"Loss: CrossEntropy + Dice (multi-class, {out_channels} classes)")
+    else:
+        pos_weight = torch.tensor([computed_pos_weight]).to(DEVICE)
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        print(f"Loss: BCE + Dice (binary) | pos_weight: {computed_pos_weight:.1f}")
 
     best_val_loss = float('inf')
     start_epoch = 0
@@ -203,10 +263,10 @@ def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
 
     print(f"Training on {DEVICE} | Augmentation: {augment} | Epochs: {epochs}")
-    print(f"Model: depth={depth}, base_features={base_features} ({n_params:.2f}M params)")
+    print(f"Model: depth={depth}, base_features={base_features}, norm={norm} ({n_params:.2f}M params)")
     print(f"Dataset: {n} images ({len(train_indices)} train, {n_val} val)")
     print(f"LR: {lr} | Batch size: {batch_size} | Crop: {crop_size}")
-    print(f"Loss: BCE + Dice | Scheduler: CosineAnnealing (eta_min=1e-6)")
+    print(f"Scheduler: CosineAnnealing (eta_min=1e-6)")
 
     for epoch in range(start_epoch, epochs):
         # --- Training ---
@@ -218,7 +278,11 @@ def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop
                 images, masks = images.to(DEVICE), masks.to(DEVICE)
                 optimizer.zero_grad()
                 outputs = model(images)
-                loss = bce_criterion(outputs, masks) + dice_loss(outputs, masks)
+                if multiclass:
+                    target = masks.squeeze(1).long()
+                    loss = criterion(outputs, target) + dice_loss(outputs, target, multiclass=True)
+                else:
+                    loss = criterion(outputs, masks) + dice_loss(outputs, masks)
                 loss.backward()
                 optimizer.step()
                 train_loss += loss.item()
@@ -239,9 +303,15 @@ def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop
                 for images, masks in val_loader:
                     images, masks = images.to(DEVICE), masks.to(DEVICE)
                     outputs = model(images)
-                    val_loss += (bce_criterion(outputs, masks) + dice_loss(outputs, masks)).item()
-                    val_dice += dice_score(outputs, masks).item()
-                    val_iou += iou_score(outputs, masks).item()
+                    if multiclass:
+                        target = masks.squeeze(1).long()
+                        val_loss += (criterion(outputs, target) + dice_loss(outputs, target, multiclass=True)).item()
+                        val_dice += dice_score(outputs, target, multiclass=True)
+                        val_iou += iou_score(outputs, target, multiclass=True)
+                    else:
+                        val_loss += (criterion(outputs, masks) + dice_loss(outputs, masks)).item()
+                        val_dice += dice_score(outputs, masks).item()
+                        val_iou += iou_score(outputs, masks).item()
 
             n_batches = len(val_loader)
             avg_val_loss = val_loss / n_batches
@@ -273,6 +343,8 @@ def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop
                     'best_val_loss': best_val_loss,
                     'depth': depth,
                     'base_features': base_features,
+                    'norm': norm,
+                    'out_channels': out_channels,
                 }, BEST_PATH)
                 print(f"  -> Saved best model (val_loss={best_val_loss:.4f})")
         else:
@@ -290,6 +362,8 @@ def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop
         'best_val_loss': best_val_loss,
         'depth': depth,
         'base_features': base_features,
+        'norm': norm,
+        'out_channels': out_channels,
     }, SAVE_PATH)
     print(f"Training complete. Final model saved to {SAVE_PATH}")
     if val_loader is not None:
@@ -308,7 +382,12 @@ if __name__ == "__main__":
     parser.add_argument('--crop_size', type=int, default=512)
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume from (e.g. models/best_model.pth)')
+    parser.add_argument('--norm', type=str, default='batch', choices=['batch', 'group', 'instance'],
+                        help='Normalization layer. Use "group" for small batches or cross-domain data.')
+    parser.add_argument('--out_channels', type=int, default=1,
+                        help='Output channels: 1 for binary, N for N-class segmentation.')
     args = parser.parse_args()
 
     train(args.epochs, args.batch_size, args.lr, args.augment, args.val_split,
-          args.depth, args.base_features, args.crop_size, args.resume)
+          args.depth, args.base_features, args.crop_size, args.resume,
+          norm=args.norm, out_channels=args.out_channels)

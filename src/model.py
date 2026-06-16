@@ -101,3 +101,63 @@ class UNet(nn.Module):
             x = decoder(x)
 
         return self.final(x)
+
+
+class LegacyUNet(nn.Module):
+    """Pre-residual UNet for loading checkpoints saved before the residual refactor.
+    Matches the original plain nn.Sequential conv_block architecture exactly."""
+
+    def __init__(self, in_channels=1, out_channels=1, depth=4, base_features=64):
+        super().__init__()
+        self.depth = depth
+        self.out_channels = out_channels
+
+        def conv_block(in_ch, out_ch, dropout=0.0):
+            layers = [
+                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+            ]
+            if dropout > 0:
+                layers.append(nn.Dropout2d(dropout))
+            return nn.Sequential(*layers)
+
+        self.encoders = nn.ModuleList()
+        self.pool = nn.MaxPool2d(2)
+        ch = in_channels
+        for i in range(depth):
+            features = base_features * (2 ** i)
+            drop = 0.2 if i == depth - 1 else (0.1 if i == depth - 2 else 0.0)
+            self.encoders.append(conv_block(ch, features, dropout=drop))
+            ch = features
+
+        self.upconvs = nn.ModuleList()
+        self.decoders = nn.ModuleList()
+        for i in range(depth - 2, -1, -1):
+            features = base_features * (2 ** i)
+            self.upconvs.append(nn.ConvTranspose2d(features * 2, features, kernel_size=2, stride=2))
+            drop = 0.1 if i == depth - 2 else 0.0
+            self.decoders.append(conv_block(features * 2, features, dropout=drop))
+
+        self.final = nn.Conv2d(base_features, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        enc_features = []
+        for i, encoder in enumerate(self.encoders):
+            x = encoder(x)
+            enc_features.append(x)
+            if i < self.depth - 1:
+                x = self.pool(x)
+
+        for i, (upconv, decoder) in enumerate(zip(self.upconvs, self.decoders)):
+            x = upconv(x)
+            skip = enc_features[self.depth - 2 - i]
+            if x.shape != skip.shape:
+                x = TF.center_crop(x, [skip.shape[2], skip.shape[3]])
+            x = torch.cat([x, skip], dim=1)
+            x = decoder(x)
+
+        return self.final(x)

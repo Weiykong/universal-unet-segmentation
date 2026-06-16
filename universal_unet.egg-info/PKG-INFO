@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: universal-unet
+Version: 0.1.0
+Summary: Universal U-Net segmentation — napari plugin
+Requires-Python: >=3.9
+License-File: LICENSE
+Requires-Dist: napari>=0.5.0
+Requires-Dist: torch>=2.0.0
+Requires-Dist: torchvision>=0.15.0
+Requires-Dist: tifffile>=2023.0.0
+Requires-Dist: numpy>=1.24
+Requires-Dist: tqdm
+Requires-Dist: Pillow>=9.0.0
+Requires-Dist: magicgui
+Requires-Dist: qtpy
+Dynamic: license-file

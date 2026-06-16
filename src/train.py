@@ -176,17 +176,18 @@ def iou_score(pred, target, threshold=0.5, multiclass=False):
 
 
 def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop_size,
-          resume=None, norm='batch', out_channels=1):
+          resume=None, norm='batch', out_channels=1,
+          image_dir="data/images", mask_dir="data/masks", save_dir="models"):
     # Device setup
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if torch.backends.mps.is_available():
         DEVICE = torch.device("mps")
 
-    DATA_DIR = "data/images"
-    MASK_DIR = "data/masks"
-    SAVE_PATH = "models/bead_unet.pth"
-    BEST_PATH = "models/best_model.pth"
-    os.makedirs("models", exist_ok=True)
+    DATA_DIR = image_dir
+    MASK_DIR = mask_dir
+    os.makedirs(save_dir, exist_ok=True)
+    SAVE_PATH = os.path.join(save_dir, "bead_unet.pth")
+    BEST_PATH = os.path.join(save_dir, "best_model.pth")
 
     # TensorBoard (optional)
     writer = None
@@ -380,6 +381,9 @@ if __name__ == "__main__":
     parser.add_argument('--depth', type=int, default=4)
     parser.add_argument('--base_features', type=int, default=64)
     parser.add_argument('--crop_size', type=int, default=512)
+    parser.add_argument('--image_dir', type=str, default='data/images')
+    parser.add_argument('--mask_dir',  type=str, default='data/masks')
+    parser.add_argument('--save_dir',  type=str, default='models')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume from (e.g. models/best_model.pth)')
     parser.add_argument('--norm', type=str, default='batch', choices=['batch', 'group', 'instance'],
@@ -390,4 +394,5 @@ if __name__ == "__main__":
 
     train(args.epochs, args.batch_size, args.lr, args.augment, args.val_split,
           args.depth, args.base_features, args.crop_size, args.resume,
-          norm=args.norm, out_channels=args.out_channels)
+          norm=args.norm, out_channels=args.out_channels,
+          image_dir=args.image_dir, mask_dir=args.mask_dir, save_dir=args.save_dir)

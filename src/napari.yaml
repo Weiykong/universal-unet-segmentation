@@ -1,0 +1,11 @@
+name: universal-unet
+display_name: Universal U-Net
+contributions:
+  commands:
+    - id: universal-unet.make_widget
+      python_name: universal_unet:make_unet_widget
+      title: Open Universal U-Net
+  widgets:
+    - command: universal-unet.make_widget
+      display_name: Universal U-Net
+      autogenerate: false

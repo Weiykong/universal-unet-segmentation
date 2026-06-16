@@ -1,0 +1,2 @@
+[napari.manifest]
+universal-unet = universal_unet:napari.yaml

@@ -4,7 +4,7 @@ import tifffile
 import numpy as np
 import os
 import glob
-from model import UNet
+from model import UNet, LegacyUNet
 from tqdm import tqdm
 
 # --- CONFIGURATION ---
@@ -30,44 +30,66 @@ def load_image(path):
         return img
 
 
+def _is_legacy_state_dict(sd):
+    """Detect pre-residual checkpoints: encoder keys are flat (encoders.0.0.weight)
+    rather than nested under .block. (encoders.0.block.0.weight)."""
+    return any('.block.' not in k and k.startswith('encoders.') for k in sd)
+
+
+def _infer_arch(sd):
+    """Infer depth and base_features from state dict key shapes."""
+    enc_indices = sorted({int(k.split('.')[1]) for k in sd if k.startswith('encoders.')})
+    depth = len(enc_indices)
+    # base_features = out_channels of first encoder conv
+    first_conv = next(v for k, v in sd.items() if k.startswith('encoders.0.') and k.endswith('.weight') and v.dim() == 4)
+    base_features = first_conv.shape[0]
+    out_channels = sd['final.weight'].shape[0]
+    return depth, base_features, out_channels
+
+
 def load_model(model_path):
-    """Load model, auto-detecting checkpoint format (dict with hyperparams or raw state_dict)."""
+    """Load model, auto-detecting checkpoint format."""
     checkpoint = torch.load(model_path, map_location=DEVICE)
-    if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
-        depth = checkpoint.get('depth', 4)
-        base_features = checkpoint.get('base_features', 64)
-        norm = checkpoint.get('norm', 'batch')
-        out_channels = checkpoint.get('out_channels', 1)
+    sd = checkpoint['state_dict'] if isinstance(checkpoint, dict) and 'state_dict' in checkpoint else checkpoint
+
+    if _is_legacy_state_dict(sd):
+        depth, base_features, out_channels = _infer_arch(sd)
+        model = LegacyUNet(depth=depth, base_features=base_features,
+                           out_channels=out_channels).to(DEVICE)
+        model.load_state_dict(sd)
+        print(f"Loaded legacy model: depth={depth}, base_features={base_features}, out_channels={out_channels}")
+    else:
+        depth        = checkpoint.get('depth', 4)         if isinstance(checkpoint, dict) else 4
+        base_features= checkpoint.get('base_features', 64) if isinstance(checkpoint, dict) else 64
+        norm         = checkpoint.get('norm', 'batch')     if isinstance(checkpoint, dict) else 'batch'
+        out_channels = checkpoint.get('out_channels', 1)   if isinstance(checkpoint, dict) else 1
         model = UNet(depth=depth, base_features=base_features,
                      norm=norm, out_channels=out_channels).to(DEVICE)
-        model.load_state_dict(checkpoint['state_dict'])
-        print(f"Loaded model: depth={depth}, base_features={base_features}, "
-              f"norm={norm}, out_channels={out_channels}")
-    else:
-        model = UNet().to(DEVICE)
-        model.load_state_dict(checkpoint)
-        print("Loaded model (legacy format, using defaults)")
+        model.load_state_dict(sd)
+        print(f"Loaded model: depth={depth}, base_features={base_features}, norm={norm}, out_channels={out_channels}")
+
     return model
 
 
-def predict_folder():
-    if not os.path.exists(INPUT_DIR):
-        os.makedirs(INPUT_DIR)
-        print(f"Created input folder: {INPUT_DIR}")
+def predict_folder(input_dir=INPUT_DIR, output_dir=OUTPUT_DIR,
+                   model_path=MODEL_PATH, threshold=0.5):
+    if not os.path.exists(input_dir):
+        os.makedirs(input_dir)
+        print(f"Created input folder: {input_dir}")
         return
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
-    if not os.path.exists(MODEL_PATH):
-        print(f"Model not found at {MODEL_PATH}.")
+    if not os.path.exists(model_path):
+        print(f"Model not found at {model_path}.")
         return
 
-    model = load_model(MODEL_PATH)
+    model = load_model(model_path)
     model.eval()
 
     image_paths = sorted(
         p for ext in SUPPORTED_EXTENSIONS
-        for p in glob.glob(os.path.join(INPUT_DIR, ext))
+        for p in glob.glob(os.path.join(input_dir, ext))
     )
 
     if not image_paths:
@@ -103,15 +125,15 @@ def predict_folder():
 
         multiclass = model.out_channels > 1
         if multiclass:
-            # Save integer label map (0..N-1)
             result = output.argmax(dim=1).squeeze().cpu().numpy().astype(np.uint8)
-            save_path = os.path.join(OUTPUT_DIR, f"labels_{filename}")
+            save_path = os.path.join(output_dir, f"labels_{filename}")
             tifffile.imwrite(save_path, result)
         else:
             prob_map = torch.sigmoid(output).squeeze().cpu().numpy()
-            prob_map = (prob_map * 255.0).astype(np.float32)
-            save_path = os.path.join(OUTPUT_DIR, f"prob_{filename}")
-            tifffile.imwrite(save_path, prob_map)
+            binary = (prob_map > threshold).astype(np.uint8) * 255
+            save_path = os.path.join(output_dir, f"prob_{filename}")
+            tifffile.imwrite(save_path, prob_map * 255.0)
+            tifffile.imwrite(os.path.join(output_dir, f"mask_{filename}"), binary)
 
 if __name__ == "__main__":
     predict_folder()

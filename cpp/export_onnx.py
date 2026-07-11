@@ -18,7 +18,12 @@ OPSET = 17
 
 
 def _is_legacy(sd):
-    return any('.block.' not in k and k.startswith('encoders.') for k in sd)
+    for k in sd:
+        if k.startswith('encoders.'):
+            parts = k.split('.')
+            if len(parts) > 2 and parts[2].isdigit():
+                return True
+    return False
 
 
 def _infer_arch(sd):
@@ -39,7 +44,9 @@ def load_model(path):
         bf = ckpt.get('base_features', 64) if isinstance(ckpt, dict) else 64
         norm = ckpt.get('norm', 'batch') if isinstance(ckpt, dict) else 'batch'
         oc = ckpt.get('out_channels', 1) if isinstance(ckpt, dict) else 1
-        m = UNet(depth=d, base_features=bf, norm=norm, out_channels=oc)
+        attention = ckpt.get('attention', False) if isinstance(ckpt, dict) else False
+        se_block = ckpt.get('se_block', False) if isinstance(ckpt, dict) else False
+        m = UNet(depth=d, base_features=bf, norm=norm, out_channels=oc, attention=attention, se_block=se_block)
     m.load_state_dict(sd)
     m.eval()
     print(f"Loaded model: depth={m.depth}, out_channels={m.out_channels}")

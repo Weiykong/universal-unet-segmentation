@@ -12,7 +12,7 @@ import glob
 import numpy as np
 import tifffile
 
-SRC_DIR = os.path.expanduser("~/Downloads/Fluo-C2DL-Huh7_trainning")
+SRC_DIR = "Fluo-C2DL-Huh7_trainning"
 DST_IMG = "data/images"
 DST_MASK = "data/masks"
 

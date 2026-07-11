@@ -328,10 +328,14 @@ class TrainTab(QWidget):
         self._norm  = QComboBox(); self._norm.addItems(["batch", "group", "instance"])
         self._norm.setToolTip("Normalization. 'group' generalizes best for small batches / cross-domain data.")
         self._outch = IntSlider(1, 16, 1, tooltip="Output classes. 1 = binary (sigmoid). N>1 = multi-class (softmax).")
+        self._attention = QCheckBox("Enable Attention Gates in skip connections")
+        self._se_block = QCheckBox("Enable Squeeze-and-Excitation in residual units")
         form.addRow("Depth:", self._depth)
         form.addRow("Base features:", self._base)
         form.addRow("Norm layer:", self._norm)
         form.addRow("Out channels:", self._outch)
+        form.addRow("Attention Gates:", self._attention)
+        form.addRow("SE Blocks:", self._se_block)
         root.addWidget(grp)
 
         # ── Training hyperparameters ─────────────────────────────────────────
@@ -439,6 +443,8 @@ class TrainTab(QWidget):
             resume        = self._resume.text() or None,
             norm          = self._norm.currentText(),
             out_channels  = self._outch.value(),
+            attention     = self._attention.isChecked(),
+            se_block      = self._se_block.isChecked(),
             image_dir     = self._img.text(),
             mask_dir      = self._mask.text(),
             save_dir      = self._save.text(),
@@ -452,7 +458,8 @@ class TrainTab(QWidget):
             f"Save   : {kwargs['save_dir']}\n"
             f"Epochs : {kwargs['epochs']}  |  BS: {kwargs['batch_size']}  |  LR: {kwargs['lr']}\n"
             f"Depth  : {kwargs['depth']}  |  Base: {kwargs['base_features']}  |  Norm: {kwargs['norm']}\n"
-            f"Classes: {kwargs['out_channels']}  |  Crop: {kwargs['crop_size']}  |  Aug: {kwargs['augment']}\n\n"
+            f"Attn   : {kwargs['attention']}  |  SE: {kwargs['se_block']}  |  Aug: {kwargs['augment']}\n"
+            f"Classes: {kwargs['out_channels']}  |  Crop: {kwargs['crop_size']}\n\n"
         )
         self._progress.setRange(0, kwargs['epochs'])
         self._progress.setValue(0)

@@ -33,7 +33,12 @@ def load_image(path):
 def _is_legacy_state_dict(sd):
     """Detect pre-residual checkpoints: encoder keys are flat (encoders.0.0.weight)
     rather than nested under .block. (encoders.0.block.0.weight)."""
-    return any('.block.' not in k and k.startswith('encoders.') for k in sd)
+    for k in sd:
+        if k.startswith('encoders.'):
+            parts = k.split('.')
+            if len(parts) > 2 and parts[2].isdigit():
+                return True
+    return False
 
 
 def _infer_arch(sd):
@@ -63,10 +68,14 @@ def load_model(model_path):
         base_features= checkpoint.get('base_features', 64) if isinstance(checkpoint, dict) else 64
         norm         = checkpoint.get('norm', 'batch')     if isinstance(checkpoint, dict) else 'batch'
         out_channels = checkpoint.get('out_channels', 1)   if isinstance(checkpoint, dict) else 1
+        attention    = checkpoint.get('attention', False)  if isinstance(checkpoint, dict) else False
+        se_block     = checkpoint.get('se_block', False)   if isinstance(checkpoint, dict) else False
         model = UNet(depth=depth, base_features=base_features,
-                     norm=norm, out_channels=out_channels).to(DEVICE)
+                     norm=norm, out_channels=out_channels,
+                     attention=attention, se_block=se_block).to(DEVICE)
         model.load_state_dict(sd)
-        print(f"Loaded model: depth={depth}, base_features={base_features}, norm={norm}, out_channels={out_channels}")
+        print(f"Loaded model: depth={depth}, base_features={base_features}, norm={norm}, "
+              f"out_channels={out_channels}, attention={attention}, se_block={se_block}")
 
     return model
 

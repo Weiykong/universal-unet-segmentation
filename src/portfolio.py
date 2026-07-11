@@ -18,8 +18,16 @@ DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 def load_model(path):
     checkpoint = torch.load(path, map_location=DEVICE)
     if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
-        model = UNet(depth=checkpoint.get('depth', 4),
-                     base_features=checkpoint.get('base_features', 64)).to(DEVICE)
+        depth = checkpoint.get('depth', 4)
+        base_features = checkpoint.get('base_features', 64)
+        norm = checkpoint.get('norm', 'batch')
+        attention = checkpoint.get('attention', False)
+        se_block = checkpoint.get('se_block', False)
+        model = UNet(depth=depth,
+                     base_features=base_features,
+                     norm=norm,
+                     attention=attention,
+                     se_block=se_block).to(DEVICE)
         model.load_state_dict(checkpoint['state_dict'])
     else:
         model = UNet().to(DEVICE)

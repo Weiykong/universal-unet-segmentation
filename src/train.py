@@ -176,7 +176,7 @@ def iou_score(pred, target, threshold=0.5, multiclass=False):
 
 
 def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop_size,
-          resume=None, norm='batch', out_channels=1,
+          resume=None, norm='batch', out_channels=1, attention=False, se_block=False,
           image_dir="data/images", mask_dir="data/masks", save_dir="models"):
     # Device setup
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -230,9 +230,30 @@ def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop
 
     multiclass = out_channels > 1
 
+    best_val_loss = float('inf')
+    start_epoch = 0
+    checkpoint = None
+
+    # Load checkpoint if resuming to dynamically override architecture details
+    if resume and os.path.exists(resume):
+        checkpoint = torch.load(resume, map_location=DEVICE)
+        if isinstance(checkpoint, dict):
+            if 'depth' in checkpoint:
+                depth = checkpoint['depth']
+            if 'base_features' in checkpoint:
+                base_features = checkpoint['base_features']
+            if 'norm' in checkpoint:
+                norm = checkpoint['norm']
+            if 'out_channels' in checkpoint:
+                out_channels = checkpoint['out_channels']
+            if 'attention' in checkpoint:
+                attention = checkpoint['attention']
+            if 'se_block' in checkpoint:
+                se_block = checkpoint['se_block']
+
     # Model, optimizer, scheduler, loss
     model = UNet(depth=depth, base_features=base_features, norm=norm,
-                 out_channels=out_channels).to(DEVICE)
+                 out_channels=out_channels, attention=attention, se_block=se_block).to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
@@ -244,27 +265,26 @@ def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         print(f"Loss: BCE + Dice (binary) | pos_weight: {computed_pos_weight:.1f}")
 
-    best_val_loss = float('inf')
-    start_epoch = 0
-
-    # Resume from checkpoint
-    if resume and os.path.exists(resume):
-        checkpoint = torch.load(resume, map_location=DEVICE)
-        model.load_state_dict(checkpoint['state_dict'])
-        if 'optimizer' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer'])
-        if 'scheduler' in checkpoint:
-            scheduler.load_state_dict(checkpoint['scheduler'])
-        if 'epoch' in checkpoint:
-            start_epoch = checkpoint['epoch'] + 1
-        if 'best_val_loss' in checkpoint:
-            best_val_loss = checkpoint['best_val_loss']
+    # Resume optimizer and states from checkpoint
+    if checkpoint is not None:
+        sd = checkpoint['state_dict'] if 'state_dict' in checkpoint else checkpoint
+        model.load_state_dict(sd)
+        if isinstance(checkpoint, dict):
+            if 'optimizer' in checkpoint:
+                optimizer.load_state_dict(checkpoint['optimizer'])
+            if 'scheduler' in checkpoint:
+                scheduler.load_state_dict(checkpoint['scheduler'])
+            if 'epoch' in checkpoint:
+                start_epoch = checkpoint['epoch'] + 1
+            if 'best_val_loss' in checkpoint:
+                best_val_loss = checkpoint['best_val_loss']
         print(f"Resumed from {resume} (epoch {start_epoch}, best_val_loss={best_val_loss:.4f})")
 
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
 
     print(f"Training on {DEVICE} | Augmentation: {augment} | Epochs: {epochs}")
-    print(f"Model: depth={depth}, base_features={base_features}, norm={norm} ({n_params:.2f}M params)")
+    print(f"Model: depth={depth}, base_features={base_features}, norm={norm}, "
+          f"attention={attention}, se_block={se_block} ({n_params:.2f}M params)")
     print(f"Dataset: {n} images ({len(train_indices)} train, {n_val} val)")
     print(f"LR: {lr} | Batch size: {batch_size} | Crop: {crop_size}")
     print(f"Scheduler: CosineAnnealing (eta_min=1e-6)")
@@ -346,6 +366,8 @@ def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop
                     'base_features': base_features,
                     'norm': norm,
                     'out_channels': out_channels,
+                    'attention': attention,
+                    'se_block': se_block,
                 }, BEST_PATH)
                 print(f"  -> Saved best model (val_loss={best_val_loss:.4f})")
         else:
@@ -365,6 +387,8 @@ def train(epochs, batch_size, lr, augment, val_split, depth, base_features, crop
         'base_features': base_features,
         'norm': norm,
         'out_channels': out_channels,
+        'attention': attention,
+        'se_block': se_block,
     }, SAVE_PATH)
     print(f"Training complete. Final model saved to {SAVE_PATH}")
     if val_loader is not None:
@@ -390,9 +414,14 @@ if __name__ == "__main__":
                         help='Normalization layer. Use "group" for small batches or cross-domain data.')
     parser.add_argument('--out_channels', type=int, default=1,
                         help='Output channels: 1 for binary, N for N-class segmentation.')
+    parser.add_argument('--attention', action='store_true',
+                        help='Enable Attention Gates on skip connections.')
+    parser.add_argument('--se_block', action='store_true',
+                        help='Enable Squeeze-and-Excitation blocks in residual units.')
     args = parser.parse_args()
 
     train(args.epochs, args.batch_size, args.lr, args.augment, args.val_split,
           args.depth, args.base_features, args.crop_size, args.resume,
           norm=args.norm, out_channels=args.out_channels,
+          attention=args.attention, se_block=args.se_block,
           image_dir=args.image_dir, mask_dir=args.mask_dir, save_dir=args.save_dir)
